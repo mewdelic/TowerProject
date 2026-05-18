@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/babelsim-core", "crates/babelsim-cli"]
+resolver = "2"
