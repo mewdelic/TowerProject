@@ -414,17 +414,30 @@ impl Tower {
                 Direction::Down
             };
 
-            for elev in &mut self.state.elevators {
+            // Find best elevator: prefer same floor + right direction + most space
+            let mut best_elev: Option<usize> = None;
+            let mut best_space = 0i32;
+
+            for (i, elev) in self.state.elevators.iter().enumerate() {
                 if elev.current_floor != person.current_floor {
                     continue;
                 }
-                if elev.passengers.len() >= elev.capacity as usize {
+                let space = elev.capacity as i32 - elev.passengers.len() as i32;
+                if space <= 0 {
                     continue;
                 }
                 if elev.direction != Direction::Idle && elev.direction != want_dir {
                     continue;
                 }
+                // Prefer the one with more space
+                if space > best_space {
+                    best_space = space;
+                    best_elev = Some(i);
+                }
+            }
 
+            if let Some(idx) = best_elev {
+                let elev = &mut self.state.elevators[idx];
                 elev.passengers.push(person.id);
                 elev.total_wait_ticks += person.wait_ticks;
                 person.state = "riding".to_string();
@@ -433,24 +446,36 @@ impl Tower {
                 if elev.direction == Direction::Idle {
                     elev.direction = want_dir;
                 }
-                break;
             }
         }
     }
 
     fn move_elevators(&mut self) {
+        // Track which floors already have an elevator heading to them
+        let mut floors_with_incoming: Vec<i32> = vec![];
+        let elevator_count = self.state.elevators.len();
+        let max_floor = self.state.floors.iter().map(|f| f.level).max().unwrap_or(0).max(1) as f64;
+
         for elev in &mut self.state.elevators {
             if elev.passengers.is_empty() {
+                // IDLE: pick the best waiting person, avoiding duplicate targets
                 let mut best_dist = i32::MAX;
                 let mut best_target = elev.current_floor;
+
                 for person in self.state.people.iter().filter(|p| p.state == "waiting") {
+                    // Skip if another elevator is already heading to this floor
+                    if floors_with_incoming.contains(&person.current_floor) {
+                        continue;
+                    }
                     let dist = (person.current_floor - elev.current_floor).abs();
                     if dist < best_dist {
                         best_dist = dist;
                         best_target = person.current_floor;
                     }
                 }
+
                 if best_target != elev.current_floor {
+                    floors_with_incoming.push(best_target);
                     elev.direction = if best_target > elev.current_floor {
                         Direction::Up
                     } else {
@@ -458,13 +483,38 @@ impl Tower {
                     };
                     elev.current_floor += if best_target > elev.current_floor { 1 } else { -1 };
                 } else {
-                    elev.direction = Direction::Idle;
+                    // No one to serve — park in zone instead of idling at ground
+                    // Use precomputed max_floor
+                    let zone_count = elevator_count.max(1) as f64;
+                    let target_zone = (elev.shaft as f64 / zone_count) * max_floor;
+                    let target_floor = target_zone as i32;
+
+                    if elev.current_floor != target_floor {
+                        elev.direction = if target_floor > elev.current_floor {
+                            Direction::Up
+                        } else {
+                            Direction::Down
+                        };
+                        elev.current_floor += if target_floor > elev.current_floor { 1 } else { -1 };
+                    } else {
+                        elev.direction = Direction::Idle;
+                    }
                 }
             } else {
-                let target = self.state.people.iter()
-                    .find(|p| elev.passengers.contains(&p.id))
+                // HAS PASSENGERS: optimize route — go to farthest dest in current direction
+                let mut destinations: Vec<i32> = self.state.people.iter()
+                    .filter(|p| elev.passengers.contains(&p.id))
                     .map(|p| p.destination)
-                    .unwrap_or(elev.current_floor);
+                    .collect();
+                destinations.sort();
+
+                let target = if elev.direction == Direction::Up {
+                    *destinations.last().unwrap_or(&elev.current_floor)
+                } else if elev.direction == Direction::Down {
+                    *destinations.first().unwrap_or(&elev.current_floor)
+                } else {
+                    destinations[0]
+                };
 
                 if elev.current_floor < target {
                     elev.current_floor += 1;
@@ -473,8 +523,20 @@ impl Tower {
                     elev.current_floor -= 1;
                     elev.direction = Direction::Down;
                 } else {
+                    // At destination floor — unload ALL passengers whose destination is this floor
                     elev.trips_completed += 1;
-                    let arrived: Vec<u32> = elev.passengers.drain(..).collect();
+                    let arrived: Vec<u32> = elev.passengers.iter()
+                        .filter(|&&pid| {
+                            self.state.people.iter()
+                                .find(|p| p.id == pid)
+                                .map(|p| p.destination == elev.current_floor)
+                                .unwrap_or(false)
+                        })
+                        .copied()
+                        .collect();
+
+                    elev.passengers.retain(|pid| !arrived.contains(pid));
+
                     for pid in &arrived {
                         if let Some(p) = self.state.people.iter_mut().find(|pp| pp.id == *pid) {
                             p.current_floor = elev.current_floor;
@@ -490,10 +552,15 @@ impl Tower {
                             }
                         }
                     }
-                    elev.direction = Direction::Idle;
+
+                    if elev.passengers.is_empty() {
+                        elev.direction = Direction::Idle;
+                    }
+                    // Otherwise keep current direction — continue to next stop
                 }
             }
 
+            // Update travel ticks for riding passengers
             for pid in &elev.passengers {
                 if let Some(p) = self.state.people.iter_mut().find(|pp| pp.id == *pid) {
                     p.travel_ticks += 1;
