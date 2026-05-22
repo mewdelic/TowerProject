@@ -1,0 +1,9 @@
+[package]
+name = "babelsim-web"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+babelsim-core = { path = "../babelsim-core" }
+serde_json = "1.0"
+tiny_http = "0.12"

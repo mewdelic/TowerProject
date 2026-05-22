@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BabelSim Tower</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0a0a0f; color: #e0e0e0; min-height: 100vh; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+h1 { color: #00d4aa; font-size: 1.8rem; margin-bottom: 8px; }
+.subtitle { color: #888; font-size: 0.9rem; margin-bottom: 24px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.card { background: #14141f; border: 1px solid #2a2a3a; border-radius: 12px; padding: 16px; }
+.card h3 { color: #00d4aa; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.metric { text-align: center; }
+.metric .value { font-size: 1.5rem; font-weight: 700; color: #fff; }
+.metric .label { font-size: 0.7rem; color: #888; text-transform: uppercase; }
+.metric .green { color: #00d4aa; }
+.metric .red { color: #ff4a4a; }
+.metric .yellow { color: #ffc107; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.controls select, .controls input { background: #1a1a2e; border: 1px solid #333; color: #e0e0e0; padding: 6px 10px; border-radius: 6px; font-size: 0.85rem; }
+.controls button { background: #00d4aa; color: #000; border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.85rem; transition: 0.2s; }
+.controls button:hover { background: #00f0c0; transform: translateY(-1px); }
+.controls button.danger { background: #ff4a4a; }
+.controls button.small { padding: 4px 10px; font-size: 0.75rem; }
+.floors { display: flex; flex-direction: column-reverse; gap: 3px; max-height: 500px; overflow-y: auto; padding: 4px; }
+.floor { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; }
+.floor:hover { background: #1a1a2e; }
+.floor .level { min-width: 32px; font-weight: 700; color: #666; }
+.floor .type { min-width: 100px; }
+.floor .bar { flex: 1; height: 12px; background: #222; border-radius: 6px; overflow: hidden; }
+.floor .bar .fill { height: 100%; border-radius: 6px; transition: width 0.3s; }
+.floor .bar .fill.office { background: #4a9eff; }
+.floor .bar .fill.hotel { background: #9b59b6; }
+.floor .bar .fill.restaurant { background: #e74c3c; }
+.floor .bar .fill.retail { background: #2ecc71; }
+.floor .bar .fill.residential { background: #f39c12; }
+.floor .bar .fill.lobby { background: #95a5a6; }
+.floor .bar .fill.observatory { background: #1abc9c; }
+.floor .sat { min-width: 32px; text-align: right; color: #888; }
+.elevators { display: flex; gap: 8px; flex-wrap: wrap; }
+.elevator { background: #1a1a2e; border: 1px solid #333; border-radius: 8px; padding: 8px; flex: 1; min-width: 150px; }
+.elevator .name { font-weight: 700; color: #00d4aa; font-size: 0.85rem; }
+.elevator .info { color: #888; font-size: 0.75rem; }
+.elevator .info span { color: #e0e0e0; }
+.log { background: #0a0a0f; border: 1px solid #222; border-radius: 8px; padding: 8px; max-height: 200px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 0.75rem; line-height: 1.5; color: #666; }
+.log .log-entry { padding: 2px 0; }
+.tab-bar { display: flex; gap: 4px; margin-bottom: 12px; }
+.tab-bar button { background: #1a1a2e; border: 1px solid #333; color: #888; padding: 6px 14px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 0.8rem; }
+.tab-bar button.active { background: #14141f; color: #00d4aa; border-bottom: 1px solid #14141f; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+@media (max-width: 768px) { .grid { grid-template-columns: 1fr; } .metrics { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🏗️ BabelSim Tower</h1>
+  <div class="subtitle">SimTower風シミュレーション / インタラクティブデモ</div>
+
+  <div class="metrics" id="metrics">
+    <div class="metric"><div class="value" id="m-time">0</div><div class="label">Time (min)</div></div>
+    <div class="metric"><div class="value green" id="m-money">150K</div><div class="label">Money</div></div>
+    <div class="metric"><div class="value yellow" id="m-sat">50.0%</div><div class="label">Satisfaction</div></div>
+    <div class="metric"><div class="value" id="m-served">0</div><div class="label">Served</div></div>
+    <div class="metric"><div class="value" id="m-profit">0%</div><div class="label">Profit Rate</div></div>
+    <div class="metric"><div class="value" id="m-wait">0.0</div><div class="label">Avg Wait</div></div>
+    <div class="metric"><div class="value" id="m-floors">0</div><div class="label">Floors</div></div>
+    <div class="metric"><div class="value" id="m-elevs">0</div><div class="label">Elevators</div></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>🕹️ Controls</h3>
+      <div class="controls">
+        <select id="floor-type">
+          <option value="Lobby">Lobby</option>
+          <option value="Office" selected>Office</option>
+          <option value="Hotel">Hotel</option>
+          <option value="Restaurant">Restaurant</option>
+          <option value="Retail">Retail</option>
+          <option value="Residential">Residential</option>
+          <option value="Observatory">Observatory</option>
+        </select>
+        <input type="number" id="floor-level" value="0" min="0" style="width:60px" placeholder="Level">
+        <button onclick="buildFloor()">+ Floor</button>
+      </div>
+      <div class="controls">
+        <input type="number" id="shaft-id" value="0" min="0" style="width:60px" placeholder="Shaft">
+        <button onclick="addElevator()">+ Elevator</button>
+      </div>
+      <div class="controls">
+        <input type="number" id="spawn-from" value="0" style="width:60px" placeholder="From">
+        <input type="number" id="spawn-to" value="1" style="width:60px" placeholder="To">
+        <input type="number" id="spawn-count" value="5" style="width:60px" placeholder="Count">
+        <button onclick="spawnPeople()">Spawn</button>
+      </div>
+      <div class="controls">
+        <input type="number" id="advance-min" value="60" min="1" style="width:80px">
+        <button onclick="advanceTime()">⏩ Advance</button>
+        <button onclick="advanceTime(240)">⏩ 4h</button>
+        <button onclick="advanceTime(1440)">⏩ 1 Day</button>
+        <button class="danger small" onclick="resetTower()">Reset</button>
+      </div>
+      <div class="controls" id="auto-controls">
+        <button onclick="startAuto()">▶ Auto-run</button>
+        <button onclick="stopAuto()" style="display:none" id="stop-btn">⏹ Stop</button>
+        <label style="color:#888;font-size:0.8rem">
+          Speed: <input type="range" id="speed" min="100" max="5000" value="1000" style="width:100px;vertical-align:middle">
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>📊 Floor Status</h3>
+      <div id="floor-list"><div style="color:#666;text-align:center;padding:20px">No floors. Build one!</div></div>
+    </div>
+  </div>
+
+  <div class="grid" style="margin-top:16px">
+    <div class="card">
+      <h3>🛗 Elevators</h3>
+      <div id="elevator-list"><div style="color:#666">No elevators.</div></div>
+    </div>
+    <div class="card">
+      <h3>📝 Event Log</h3>
+      <div class="log" id="log">
+        <div class="log-entry">🟢 BabelSim Tower started</div>
+        <div class="log-entry">——— Use controls to interact ———</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let autoInterval = null;
+
+function log(msg) {
+  const el = document.getElementById('log');
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.textContent = msg;
+  el.appendChild(entry);
+  el.scrollTop = el.scrollHeight;
+}
+
+async function api(url) {
+  try {
+    const resp = await fetch(url);
+    return await resp.json();
+  } catch(e) {
+    log('❌ Network error: ' + e.message);
+    return null;
+  }
+}
+
+async function post(url) {
+  try {
+    const resp = await fetch(url, { method: 'POST' });
+    const data = await resp.json();
+    if (data.message) log('ℹ️ ' + data.message);
+    if (data.ok === false) log('⚠️ ' + data.message);
+    return data;
+  } catch(e) {
+    log('❌ Error: ' + e.message);
+    return null;
+  }
+}
+
+function refreshState() {
+  api('/state').then(data => {
+    if (!data) return;
+    document.getElementById('m-time').textContent = data.time;
+    document.getElementById('m-money').textContent = '$' + data.money.toLocaleString();
+    document.getElementById('m-sat').textContent = data.overall_satisfaction.toFixed(1) + '%';
+    document.getElementById('m-served').textContent = data.people_served;
+    document.getElementById('m-wait').textContent = '-';
+    document.getElementById('m-floors').textContent = data.floors.length;
+    document.getElementById('m-elevs').textContent = data.elevators.length;
+
+    // Floor list
+    const fl = document.getElementById('floor-list');
+    if (data.floors.length === 0) {
+      fl.innerHTML = '<div style="color:#666;text-align:center;padding:20px">No floors. Build one!</div>';
+    } else {
+      fl.innerHTML = '<div class="floors">' + data.floors.map(f => {
+        const pct = Math.min(100, (f.occupants / f.capacity * 100)).toFixed(0);
+        return `<div class="floor">
+          <div class="level">${f.level}F</div>
+          <div class="type">${f.type}</div>
+          <div class="bar"><div class="fill ${f.type.toLowerCase()}" style="width:${pct}%"></div></div>
+          <span style="color:#888;font-size:0.7rem;min-width:50px">${f.occupants}/${f.capacity}</span>
+          <div class="sat">${f.satisfaction.toFixed(0)}%</div>
+        </div>`;
+      }).join('') + '</div>';
+    }
+
+    // Elevators
+    const el = document.getElementById('elevator-list');
+    if (data.elevators.length === 0) {
+      el.innerHTML = '<div style="color:#666">No elevators.</div>';
+    } else {
+      el.innerHTML = '<div class="elevators">' + data.elevators.map(e => {
+        const dir = e.direction === 'Up' ? '⬆️' : e.direction === 'Down' ? '⬇️' : '⏸️';
+        const maxLevel = data.floors.length > 0 ? Math.max(...data.floors.map(f => f.level)) : 1;
+        const pos = maxLevel > 0 ? (e.floor / maxLevel * 100).toFixed(0) : 0;
+        return `<div class="elevator">
+          <div class="name">${dir} Shaft ${e.shaft}</div>
+          <div class="info">Floor: <span>${e.floor}F</span></div>
+          <div class="info">Passengers: <span>${e.passengers}</span> | Trips: <span>${e.trips}</span></div>
+          <div class="bar" style="margin-top:4px;height:6px"><div class="fill" style="width:${pos}%;background:#00d4aa"></div></div>
+        </div>`;
+      }).join('') + '</div>';
+    }
+  });
+
+  api('/metrics').then(data => {
+    if (!data) return;
+    document.getElementById('m-profit').textContent = data.profit_rate + '%';
+    document.getElementById('m-wait').textContent = data.avg_wait_min.toFixed(1) + 'm';
+    document.getElementById('m-time').textContent = data.time + ' (D' + data.day + ')';
+  });
+}
+
+function buildFloor() {
+  const type = document.getElementById('floor-type').value;
+  const level = document.getElementById('floor-level').value;
+  post('/build?type=' + type + '&level=' + level).then(refreshState);
+}
+
+function addElevator() {
+  const shaft = document.getElementById('shaft-id').value;
+  post('/elevator?shaft=' + shaft).then(refreshState);
+}
+
+function spawnPeople() {
+  const from = document.getElementById('spawn-from').value;
+  const to = document.getElementById('spawn-to').value;
+  const count = document.getElementById('spawn-count').value;
+  post('/spawn?from=' + from + '&to=' + to + '&count=' + count).then(refreshState);
+}
+
+function advanceTime(min) {
+  const minutes = min || document.getElementById('advance-min').value;
+  post('/advance?minutes=' + minutes).then(refreshState);
+}
+
+function resetTower() {
+  if (confirm('Reset tower? All progress will be lost.')) {
+    post('/reset').then(refreshState);
+  }
+}
+
+function startAuto() {
+  const speed = parseInt(document.getElementById('speed').value);
+  document.getElementById('stop-btn').style.display = 'inline';
+  document.querySelector('#auto-controls button:first-child').style.display = 'none';
+  autoInterval = setInterval(() => { advanceTime(60); }, speed);
+  log('▶️ Auto-run started');
+}
+
+function stopAuto() {
+  if (autoInterval) clearInterval(autoInterval);
+  autoInterval = null;
+  document.getElementById('stop-btn').style.display = 'none';
+  document.querySelector('#auto-controls button:first-child').style.display = 'inline';
+  log('⏹️ Auto-run stopped');
+}
+
+// Initial load
+refreshState();
+// Auto-refresh every 3s while auto-running
+setInterval(() => {
+  if (autoInterval) refreshState();
+}, 3000);
+</script>
+</body>
+</html>
