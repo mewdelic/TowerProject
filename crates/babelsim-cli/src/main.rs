@@ -74,6 +74,8 @@ fn main() {
     println!("  Net:        ${}", m.money - 150_000);
     println!("  Profit %:   {}%", m.profit_rate);
     println!("  Satisfaction: {:.1}%", m.satisfaction);
+    println!("  Avg Wait:     {:.1} min", m.avg_wait_ticks);
+    println!("  Max Wait:     {} min", m.max_wait_ticks);
     println!("  Floors:       {}", m.floors);
     println!("  Elevators:    {}", m.elevators);
     println!("  Served:       {}", m.people_served);

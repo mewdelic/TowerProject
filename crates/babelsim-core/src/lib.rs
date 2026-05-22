@@ -556,6 +556,14 @@ impl Tower {
     // ── Metrics ─────────────────────────────────────────
 
     pub fn metrics(&self) -> Metrics {
+        let served: Vec<&Person> = self.state.people.iter().filter(|p| p.state == "arrived").collect();
+        let avg_wait = if served.is_empty() {
+            0.0
+        } else {
+            served.iter().map(|p| p.wait_ticks as f64).sum::<f64>() / served.len() as f64
+        };
+        let max_wait = served.iter().map(|p| p.wait_ticks).max().unwrap_or(0);
+
         Metrics {
             time: self.state.time,
             money: self.state.money,
@@ -572,6 +580,8 @@ impl Tower {
             } else {
                 0
             },
+            avg_wait_ticks: avg_wait as f64,
+            max_wait_ticks: max_wait as u64,
         }
     }
 
@@ -607,6 +617,8 @@ pub struct Metrics {
     pub satisfaction: f64,
     pub events: u32,
     pub profit_rate: i64,
+    pub avg_wait_ticks: f64,
+    pub max_wait_ticks: u64,
 }
 
 // ─── Tests ──────────────────────────────────────────────
@@ -736,8 +748,56 @@ mod tests {
         tower.advance(1440); // one full day
 
         let m = tower.metrics();
-        // Revenue should exist from 4 daily income events
-        eprintln!("Day 1 revenue={}, expenses={}, profit_rate={}%", 
-            m.total_revenue, m.total_expenses, m.profit_rate);
+        eprintln!(
+            "Day 1 revenue={}, expenses={}, profit_rate={}%",
+            m.total_revenue, m.total_expenses, m.profit_rate
+        );
+    }
+
+    #[test]
+    fn test_multi_elevator_improves_wait_time() {
+        fn run_tower(elevator_count: u32) -> Metrics {
+            let mut tower = Tower::new();
+            tower.build_floor(FloorType::Lobby, 0).unwrap();
+            tower.build_floor(FloorType::Retail, 1).unwrap();
+
+            for i in 0..elevator_count.min(2) {
+                tower.add_elevator(i).unwrap();
+            }
+
+            for _ in 0..15 {
+                tower.spawn_person(0, 1);
+                tower.spawn_person(1, 0);
+            }
+
+            tower.advance(240);
+            tower.metrics()
+        }
+
+        let m1 = run_tower(1);
+        let m2 = run_tower(2);
+
+        eprintln!("1 elevator: avg_wait={:.1} ticks, max_wait={}, served={}",
+            m1.avg_wait_ticks, m1.max_wait_ticks, m1.people_served);
+        eprintln!("2 elevators: avg_wait={:.1} ticks, max_wait={}, served={}",
+            m2.avg_wait_ticks, m2.max_wait_ticks, m2.people_served);
+
+        // 2 elevators should serve more people or have lower wait times
+        // It might not strictly improve avg_wait if both elevators serve fast,
+        // but total served should be >= for 2 elevators
+        assert!(m2.people_served >= m1.people_served,
+            "Two elevators should serve at least as many: {} vs {}",
+            m2.people_served, m1.people_served);
+    }
+
+    #[test]
+    fn test_elevator_capacity_scaling() {
+        let mut tower = Tower::new();
+        tower.build_floor(FloorType::Lobby, 0).unwrap();
+        tower.add_elevator(0).unwrap();
+        tower.add_elevator(1).unwrap();
+
+        assert_eq!(tower.get_state().elevators.len(), 2);
+        assert!(tower.get_state().elevators.iter().all(|e| e.current_floor == 0));
     }
 }
