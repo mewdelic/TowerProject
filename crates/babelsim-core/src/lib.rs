@@ -249,17 +249,8 @@ impl Tower {
 
         // 1. Spawn visitors based on time of day
         let hour = (tick / 60) % 24;
-        let is_business_hours = hour >= 7 && hour <= 22;
-        let spawn_rate = if hour >= 8 && hour <= 18 {
-            2  // Peak hours: 2x spawn attempts
-        } else if is_business_hours {
-            1
-        } else {
-            4  // Night: rare spawns (1/4 chance)
-        };
-
-        if is_business_hours && self.fast_rand() % spawn_rate == 0 {
-            self.spawn_random_visitor();
+        if hour >= 6 && hour <= 23 && self.fast_rand() % 3 == 0 {
+            self.spawn_time_aware_visitor(hour as u32);
         }
 
         // 2. Person movement
@@ -268,12 +259,9 @@ impl Tower {
         // 3. Elevator movement
         self.move_elevators();
 
-        // 4. Economy: income 4x daily (every 6 hours), maintenance daily at midnight
-        // Income hours: 8:00 (480), 12:00 (720), 16:00 (960), 20:00 (1200)
-        let is_income_hour = tick % 1440 == 480
-            || tick % 1440 == 720
-            || tick % 1440 == 960
-            || tick % 1440 == 1200;
+        // 4. Economy: income 4x daily
+        let is_income_hour =
+            tick % 1440 == 480 || tick % 1440 == 720 || tick % 1440 == 960 || tick % 1440 == 1200;
         if is_income_hour {
             self.collect_revenue();
         }
@@ -304,18 +292,113 @@ impl Tower {
         });
     }
 
-    fn spawn_random_visitor(&mut self) {
+    /// Time-aware visitor spawn. Picks origin/destination based on hour of day
+    /// and floor types. Creates natural traffic patterns:
+    /// - Morning (6-10): people going from lobby/residential to offices
+    /// - Midday (11-14): restaurant/retail traffic
+    /// - Afternoon (14-17): mixed office/retail
+    /// - Evening (17-22): hotel/restaurant traffic
+    /// - Night (22-23): hotel/residential return
+    fn spawn_time_aware_visitor(&mut self, hour: u32) {
         if self.state.floors.len() < 2 {
             return;
         }
-        let a = (self.fast_rand() as usize) % self.state.floors.len();
-        let mut b = (self.fast_rand() as usize) % self.state.floors.len();
-        if b == a {
-            b = (b + 1) % self.state.floors.len();
+
+        // 1. Find floors of each type
+        let mut lobbies: Vec<i32> = vec![];
+        let mut offices: Vec<i32> = vec![];
+        let mut hotels: Vec<i32> = vec![];
+        let mut restaurants: Vec<i32> = vec![];
+        let mut retail: Vec<i32> = vec![];
+        let mut residential: Vec<i32> = vec![];
+
+        for floor in &self.state.floors {
+            match floor.floor_type {
+                FloorType::Lobby => lobbies.push(floor.level),
+                FloorType::Office => offices.push(floor.level),
+                FloorType::Hotel => hotels.push(floor.level),
+                FloorType::Restaurant => restaurants.push(floor.level),
+                FloorType::Retail => retail.push(floor.level),
+                FloorType::Residential => residential.push(floor.level),
+                FloorType::Observatory => {}
+            }
         }
-        let from = self.state.floors[a].level;
-        let to = self.state.floors[b].level;
-        self.spawn_person(from, to);
+
+        let roll = self.fast_rand() % 100;
+        let (from_idx, to_idx) = match hour {
+            // Morning rush (6-10): residential/lobby → offices, hotels check-out
+            6..=10 => {
+                if roll < 40 && !offices.is_empty() && !lobbies.is_empty() {
+                    // People from lobby going to offices
+                    (pick_rand(&lobbies, &mut self.rng), pick_rand(&offices, &mut self.rng))
+                } else if roll < 65 && !residential.is_empty() && !offices.is_empty() {
+                    (pick_rand(&residential, &mut self.rng), pick_rand(&offices, &mut self.rng))
+                } else if roll < 80 && !hotels.is_empty() && !lobbies.is_empty() {
+                    // Hotel check-outs heading to lobby
+                    (pick_rand(&hotels, &mut self.rng), pick_rand(&lobbies, &mut self.rng))
+                } else if !lobbies.is_empty() && !retail.is_empty() {
+                    (pick_rand(&lobbies, &mut self.rng), pick_rand(&retail, &mut self.rng))
+                } else {
+                    return;
+                }
+            }
+            // Lunch hour (11-13): offices → restaurants/retail
+            11..=13 => {
+                if roll < 50 && !offices.is_empty() && !restaurants.is_empty() {
+                    (pick_rand(&offices, &mut self.rng), pick_rand(&restaurants, &mut self.rng))
+                } else if roll < 75 && !offices.is_empty() && !retail.is_empty() {
+                    (pick_rand(&offices, &mut self.rng), pick_rand(&retail, &mut self.rng))
+                } else if !lobbies.is_empty() && (!offices.is_empty() || !retail.is_empty()) {
+                    (pick_rand(&lobbies, &mut self.rng),
+                     pick_rand(if roll < 90 { &offices } else { &retail }, &mut self.rng))
+                } else {
+                    return;
+                }
+            }
+            // Afternoon (14-16): mixed traffic
+            14..=16 => {
+                if roll < 30 && !lobbies.is_empty() && !offices.is_empty() {
+                    (pick_rand(&lobbies, &mut self.rng), pick_rand(&offices, &mut self.rng))
+                } else if roll < 55 && !offices.is_empty() && !retail.is_empty() {
+                    (pick_rand(&offices, &mut self.rng), pick_rand(&retail, &mut self.rng))
+                } else if roll < 75 && !retail.is_empty() && !lobbies.is_empty() {
+                    (pick_rand(&retail, &mut self.rng), pick_rand(&lobbies, &mut self.rng))
+                } else if !lobbies.is_empty() && !hotels.is_empty() {
+                    (pick_rand(&lobbies, &mut self.rng), pick_rand(&hotels, &mut self.rng))
+                } else {
+                    return;
+                }
+            }
+            // Evening (17-21): offices → home/hotel, restaurant peak
+            17..=21 => {
+                if roll < 30 && !offices.is_empty() && !residential.is_empty() {
+                    (pick_rand(&offices, &mut self.rng), pick_rand(&residential, &mut self.rng))
+                } else if roll < 55 && !offices.is_empty() && !restaurants.is_empty() {
+                    (pick_rand(&offices, &mut self.rng), pick_rand(&restaurants, &mut self.rng))
+                } else if roll < 75 && !lobbies.is_empty() && !hotels.is_empty() {
+                    (pick_rand(&lobbies, &mut self.rng), pick_rand(&hotels, &mut self.rng))
+                } else if !restaurants.is_empty() && !lobbies.is_empty() {
+                    (pick_rand(&restaurants, &mut self.rng), pick_rand(&lobbies, &mut self.rng))
+                } else {
+                    return;
+                }
+            }
+            // Late night (22..=23): returning home
+            22..=23 => {
+                if roll < 40 && !restaurants.is_empty() && !residential.is_empty() {
+                    (pick_rand(&restaurants, &mut self.rng), pick_rand(&residential, &mut self.rng))
+                } else if roll < 70 && !hotels.is_empty() && !lobbies.is_empty() {
+                    (pick_rand(&hotels, &mut self.rng), pick_rand(&lobbies, &mut self.rng))
+                } else if !retail.is_empty() && !residential.is_empty() {
+                    (pick_rand(&retail, &mut self.rng), pick_rand(&residential, &mut self.rng))
+                } else {
+                    return;
+                }
+            }
+            _ => return,
+        };
+
+        self.spawn_person(from_idx, to_idx);
     }
 
     fn move_people(&mut self) {
@@ -474,22 +557,65 @@ impl Tower {
         let mut total_sat = 0.0;
         let mut count = 0;
 
+        // Person satisfaction: floor-type specific wait tolerance
         for person in self.state.people.iter().filter(|p| p.state == "arrived") {
+            // Find which floor they arrived at for type-specific tolerance
+            let floor_type = self.state.floors.iter()
+                .find(|f| f.level == person.current_floor)
+                .map(|f| &f.floor_type);
+
+            let wait_penalty = match floor_type {
+                Some(FloorType::Office) => 0.8,      // Office workers are impatient
+                Some(FloorType::Hotel) => 0.3,        // Hotel guests more relaxed
+                Some(FloorType::Restaurant) => 0.4,   // Restaurant diners tolerant
+                Some(FloorType::Retail) => 0.5,       // Shoppers moderately patient
+                Some(FloorType::Residential) => 0.6,  // Residents moderate
+                _ => 0.5,
+            };
+            let travel_penalty = wait_penalty * 0.6;
+
             let mut sat: f64 = 50.0;
-            sat -= person.wait_ticks as f64 * 0.6;
-            sat -= person.travel_ticks as f64 * 0.4;
+            sat -= person.wait_ticks as f64 * wait_penalty;
+            sat -= person.travel_ticks as f64 * travel_penalty;
             sat = sat.max(0.0).min(100.0);
             total_sat += sat;
             count += 1;
         }
 
+        // Waiting people also affect satisfaction (queue frustration)
+        let waiting = self.state.people.iter().filter(|p| p.state == "waiting").count();
+        if waiting > 50 {
+            total_sat -= 10.0;
+            count += 1;
+        } else if waiting > 20 {
+            total_sat -= 5.0;
+            count += 1;
+        } else if waiting > 10 {
+            total_sat -= 2.0;
+            count += 1;
+        }
+
+        // Floor satisfaction: type-specific crowding tolerance
         for floor in &self.state.floors {
             let occupancy_rate = floor.current_occupants as f64 / floor.capacity as f64;
             let mut sat = floor.satisfaction;
-            if occupancy_rate > 0.8 {
-                sat -= 2.0; // overcrowded penalty
+
+            let crowding_sensitivity = match floor.floor_type {
+                FloorType::Office => 3.0,     // Offices hate being packed
+                FloorType::Hotel => 1.5,
+                FloorType::Restaurant => 2.0, // Restaurants want breathing room
+                FloorType::Retail => 2.5,     // Shoppers dislike crowding
+                FloorType::Residential => 4.0,// Residents very sensitive
+                FloorType::Lobby => 0.5,      // Lobbies expected to be busy
+                FloorType::Observatory => 1.0,
+            };
+
+            if occupancy_rate > 0.9 {
+                sat -= crowding_sensitivity * 2.0;   // Severe overcrowding
+            } else if occupancy_rate > 0.75 {
+                sat -= crowding_sensitivity * 1.0;   // Moderate
             } else if occupancy_rate > 0.5 {
-                sat -= 0.5;
+                sat -= crowding_sensitivity * 0.3;   // Mild
             } else {
                 sat += 0.5;
             }
@@ -592,6 +718,15 @@ impl Tower {
         self.rng >> 33
     }
 }
+/// Pick a random element from a non-empty vector using the tower's PRNG
+fn pick_rand(vec: &[i32], rng: &mut u64) -> i32 {
+    if vec.is_empty() { return 0; }
+    *rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let idx = (*rng >> 33) as usize % vec.len();
+    vec[idx]
+}
+
+
 
 // ─── Result Types ───────────────────────────────────────
 
