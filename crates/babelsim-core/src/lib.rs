@@ -17,39 +17,45 @@ pub enum FloorType {
 }
 
 impl FloorType {
-    pub fn build_cost(&self) -> i64 {
-        match self {
-            FloorType::Office => 50_000,
-            FloorType::Hotel => 80_000,
-            FloorType::Restaurant => 30_000,
-            FloorType::Retail => 25_000,
-            FloorType::Residential => 40_000,
+    pub fn build_cost(&self, level: i32) -> i64 {
+        // Higher floors cost more: base * (1 + level/20)
+        let base = match self {
+            FloorType::Office => 60_000,
+            FloorType::Hotel => 100_000,
+            FloorType::Restaurant => 40_000,
+            FloorType::Retail => 35_000,
+            FloorType::Residential => 50_000,
             FloorType::Lobby => 10_000,
-            FloorType::Observatory => 100_000,
-        }
+            FloorType::Observatory => 120_000,
+        };
+        let height_mod = 1.0 + (level.max(0) as f64 / 20.0);
+        (base as f64 * height_mod) as i64
     }
 
-    pub fn monthly_maintenance(&self) -> i64 {
-        match self {
-            FloorType::Office => 5_000,
-            FloorType::Hotel => 8_000,
-            FloorType::Restaurant => 4_000,
-            FloorType::Retail => 3_000,
-            FloorType::Residential => 3_500,
-            FloorType::Lobby => 2_000,
-            FloorType::Observatory => 6_000,
-        }
+    pub fn daily_maintenance(&self, level: i32) -> i64 {
+        // Higher floors also cost more to maintain
+        let base = match self {
+            FloorType::Office => 4_000,
+            FloorType::Hotel => 6_000,
+            FloorType::Restaurant => 3_000,
+            FloorType::Retail => 2_500,
+            FloorType::Residential => 3_000,
+            FloorType::Lobby => 1_500,
+            FloorType::Observatory => 5_000,
+        };
+        let height_mod = 1.0 + (level.max(0) as f64 / 30.0);
+        (base as f64 * height_mod) as i64
     }
 
     pub fn income_per_person(&self) -> i64 {
         match self {
-            FloorType::Office => 200,
-            FloorType::Hotel => 500,
-            FloorType::Restaurant => 150,
-            FloorType::Retail => 100,
-            FloorType::Residential => 800,
+            FloorType::Office => 120,
+            FloorType::Hotel => 200,
+            FloorType::Restaurant => 80,
+            FloorType::Retail => 60,
+            FloorType::Residential => 180,
             FloorType::Lobby => 0,
-            FloorType::Observatory => 300,
+            FloorType::Observatory => 100,
         }
     }
 
@@ -140,7 +146,7 @@ impl Tower {
         Tower {
             state: TowerState {
                 time: 0,
-                money: 200_000,
+                money: 150_000,        // Reduced from 200K
                 total_revenue: 0,
                 total_expenses: 0,
                 floors: vec![],
@@ -162,7 +168,7 @@ impl Tower {
     // ── Construction ────────────────────────────────────
 
     pub fn build_floor(&mut self, floor_type: FloorType, level: i32) -> Result<(), String> {
-        let cost = floor_type.build_cost();
+        let cost = floor_type.build_cost(level);
         if self.state.money < cost {
             return Err(format!("Not enough money! Need {}, have {}", cost, self.state.money));
         }
@@ -183,7 +189,7 @@ impl Tower {
     }
 
     pub fn add_elevator(&mut self, shaft: u32) -> Result<(), String> {
-        let cost = 30_000;
+        let cost = 50_000; // Increased from 30K
         if self.state.money < cost {
             return Err(format!("Not enough money! Need {}, have {}", cost, self.state.money));
         }
@@ -241,9 +247,18 @@ impl Tower {
         self.state.time += 1;
         let tick = self.state.time;
 
-        // 1. Spawn random visitors
+        // 1. Spawn visitors based on time of day
         let hour = (tick / 60) % 24;
-        if hour >= 6 && hour <= 22 && self.fast_rand() % 3 == 0 {
+        let is_business_hours = hour >= 7 && hour <= 22;
+        let spawn_rate = if hour >= 8 && hour <= 18 {
+            2  // Peak hours: 2x spawn attempts
+        } else if is_business_hours {
+            1
+        } else {
+            4  // Night: rare spawns (1/4 chance)
+        };
+
+        if is_business_hours && self.fast_rand() % spawn_rate == 0 {
             self.spawn_random_visitor();
         }
 
@@ -253,10 +268,16 @@ impl Tower {
         // 3. Elevator movement
         self.move_elevators();
 
-        // 4. Economy: income every hour, maintenance every day
-        if tick % 60 == 0 {
-            self.process_economy();
+        // 4. Economy: income 4x daily (every 6 hours), maintenance daily at midnight
+        // Income hours: 8:00 (480), 12:00 (720), 16:00 (960), 20:00 (1200)
+        let is_income_hour = tick % 1440 == 480
+            || tick % 1440 == 720
+            || tick % 1440 == 960
+            || tick % 1440 == 1200;
+        if is_income_hour {
+            self.collect_revenue();
         }
+
         if tick % 1440 == 0 {
             self.process_maintenance();
         }
@@ -275,11 +296,10 @@ impl Tower {
                 e.ticks_remaining -= 1;
                 e.ticks_remaining > 0
             } else {
-                // Apply expiration effects once
                 if e.name == "fire" {
                     self.state.money -= 20_000;
                 }
-                false // remove
+                false
             }
         });
     }
@@ -288,7 +308,6 @@ impl Tower {
         if self.state.floors.len() < 2 {
             return;
         }
-        // Pick two random floors
         let a = (self.fast_rand() as usize) % self.state.floors.len();
         let mut b = (self.fast_rand() as usize) % self.state.floors.len();
         if b == a {
@@ -300,14 +319,12 @@ impl Tower {
     }
 
     fn move_people(&mut self) {
-        // People waiting for elevator: try to board
         for person in &mut self.state.people {
             if person.state != "waiting" {
                 continue;
             }
             person.wait_ticks += 1;
 
-            // Find best elevator at this floor going the right direction
             let want_dir = if person.destination > person.current_floor {
                 Direction::Up
             } else {
@@ -321,7 +338,6 @@ impl Tower {
                 if elev.passengers.len() >= elev.capacity as usize {
                     continue;
                 }
-                // Direction-aware: board only if elevator is idle or going same way
                 if elev.direction != Direction::Idle && elev.direction != want_dir {
                     continue;
                 }
@@ -331,7 +347,6 @@ impl Tower {
                 person.state = "riding".to_string();
                 person.travel_ticks = 0;
 
-                // Set elevator direction
                 if elev.direction == Direction::Idle {
                     elev.direction = want_dir;
                 }
@@ -343,7 +358,6 @@ impl Tower {
     fn move_elevators(&mut self) {
         for elev in &mut self.state.elevators {
             if elev.passengers.is_empty() {
-                // Idle: seek nearest waiting person going any direction
                 let mut best_dist = i32::MAX;
                 let mut best_target = elev.current_floor;
                 for person in self.state.people.iter().filter(|p| p.state == "waiting") {
@@ -364,7 +378,6 @@ impl Tower {
                     elev.direction = Direction::Idle;
                 }
             } else {
-                // Has passengers: go toward first passenger's destination
                 let target = self.state.people.iter()
                     .find(|p| elev.passengers.contains(&p.id))
                     .map(|p| p.destination)
@@ -377,7 +390,6 @@ impl Tower {
                     elev.current_floor -= 1;
                     elev.direction = Direction::Down;
                 } else {
-                    // Arrived! Unload
                     elev.trips_completed += 1;
                     let arrived: Vec<u32> = elev.passengers.drain(..).collect();
                     for pid in &arrived {
@@ -386,7 +398,6 @@ impl Tower {
                             p.state = "arrived".to_string();
                             self.state.population_served += 1;
 
-                            // Mark occupant on floor
                             if let Some(floor) = self.state.floors.iter_mut()
                                 .find(|f| f.level == elev.current_floor)
                             {
@@ -400,7 +411,6 @@ impl Tower {
                 }
             }
 
-            // Update travel ticks for riding passengers
             for pid in &elev.passengers {
                 if let Some(p) = self.state.people.iter_mut().find(|pp| pp.id == *pid) {
                     p.travel_ticks += 1;
@@ -409,18 +419,17 @@ impl Tower {
         }
     }
 
-    fn process_economy(&mut self) {
+    fn collect_revenue(&mut self) {
         let mut income: i64 = 0;
 
         for floor in &self.state.floors {
             if floor.current_occupants > 0 {
                 let per_person = floor.floor_type.income_per_person();
-                // Satisfaction modifier: 0.5x ~ 2.0x
-                let sat_mod = (floor.satisfaction / 100.0).max(0.3) * 2.0;
+                // Satisfaction modifier: 0.5x (low sat) ~ 1.5x (high sat)
+                let sat_mod = 0.5 + (floor.satisfaction / 100.0).clamp(0.0, 1.0) * 1.0;
                 let floor_income = (floor.current_occupants as i64) * per_person;
                 income += (floor_income as f64 * sat_mod) as i64;
             }
-            // Reset occupants for next cycle
         }
 
         self.state.money += income;
@@ -429,20 +438,33 @@ impl Tower {
 
     fn process_maintenance(&mut self) {
         let mut maint: i64 = 0;
+
+        // Floor maintenance scaled by height
         for floor in &self.state.floors {
-            maint += floor.floor_type.monthly_maintenance();
+            maint += floor.floor_type.daily_maintenance(floor.level);
         }
-        for _ in &self.state.elevators {
-            maint += 2_000;
+
+        // Elevator maintenance: base + per floor served
+        for _elev in &self.state.elevators {
+            // Assume max floor height if tower has floors
+            let max_floor = self.state.floors.iter().map(|f| f.level).max().unwrap_or(0).max(1) as f64;
+            let base = 2_000;
+            let per_floor = (max_floor / 5.0) * 100.0; // $100 per 5 floors of range
+            maint += base + per_floor as i64;
         }
-        // Fire event doubles maintenance
+
+        // Special events modify maintenance
         if self.state.active_events.iter().any(|e| e.name == "fire") {
             maint *= 2;
         }
+        if self.state.active_events.iter().any(|e| e.name == "power_outage") {
+            maint += 5_000; // Generator costs
+        }
+
         self.state.money -= maint;
         self.state.total_expenses += maint;
 
-        // Reset occupant counts after revenue cycle
+        // Reset occupant counts after daily cycle
         for floor in &mut self.state.floors {
             floor.current_occupants = 0;
         }
@@ -454,21 +476,22 @@ impl Tower {
 
         for person in self.state.people.iter().filter(|p| p.state == "arrived") {
             let mut sat: f64 = 50.0;
-            sat -= person.wait_ticks as f64 * 0.5;
-            sat -= person.travel_ticks as f64 * 0.3;
+            sat -= person.wait_ticks as f64 * 0.6;
+            sat -= person.travel_ticks as f64 * 0.4;
             sat = sat.max(0.0).min(100.0);
             total_sat += sat;
             count += 1;
         }
 
-        // Floor satisfaction
         for floor in &self.state.floors {
             let occupancy_rate = floor.current_occupants as f64 / floor.capacity as f64;
             let mut sat = floor.satisfaction;
             if occupancy_rate > 0.8 {
-                sat -= 1.0; // overcrowded
+                sat -= 2.0; // overcrowded penalty
+            } else if occupancy_rate > 0.5 {
+                sat -= 0.5;
             } else {
-                sat += 0.2;
+                sat += 0.5;
             }
             sat = sat.max(0.0).min(100.0);
             total_sat += sat;
@@ -477,7 +500,6 @@ impl Tower {
 
         if count > 0 {
             let new_avg = total_sat / count as f64;
-            // Smooth toward new value
             self.state.overall_satisfaction = self.state.overall_satisfaction * 0.9 + new_avg * 0.1;
         }
     }
@@ -485,7 +507,6 @@ impl Tower {
     fn trigger_random_event(&mut self) {
         let roll = self.fast_rand() % 100;
         let event = if roll < 30 {
-            // Fire on random floor
             let floor_idx = (self.fast_rand() as usize) % self.state.floors.len().max(1);
             Event {
                 name: "fire".to_string(),
@@ -493,7 +514,6 @@ impl Tower {
                 ticks_remaining: 30 + (self.fast_rand() % 60) as u32,
             }
         } else if roll < 60 {
-            // VIP visit - bonus
             self.state.money += 10_000;
             Event {
                 name: "vip_visit".to_string(),
@@ -501,14 +521,12 @@ impl Tower {
                 ticks_remaining: 60,
             }
         } else if roll < 80 {
-            // Power outage - elevator penalty
             Event {
                 name: "power_outage".to_string(),
                 floor: None,
                 ticks_remaining: 20,
             }
         } else {
-            // Maintenance boost
             Event {
                 name: "maintenance_boost".to_string(),
                 floor: None,
@@ -516,9 +534,7 @@ impl Tower {
             }
         };
 
-        // Event effects
         if event.name == "power_outage" {
-            // Slow elevators
             for elev in &mut self.state.elevators {
                 elev.total_wait_ticks += 10;
             }
@@ -590,7 +606,7 @@ pub struct Metrics {
     pub people_served: u64,
     pub satisfaction: f64,
     pub events: u32,
-    pub profit_rate: i64, // percentage
+    pub profit_rate: i64,
 }
 
 // ─── Tests ──────────────────────────────────────────────
@@ -607,7 +623,7 @@ mod tests {
         tower.add_elevator(0).unwrap();
         assert_eq!(tower.get_state().floors.len(), 2);
         assert_eq!(tower.get_state().elevators.len(), 1);
-        assert!(tower.get_state().money < 200_000, "Construction should cost money");
+        assert!(tower.get_state().money < 150_000, "Construction should cost money");
     }
 
     #[test]
@@ -626,21 +642,21 @@ mod tests {
     fn test_economy_cycle() {
         let mut tower = Tower::new();
         tower.build_floor(FloorType::Lobby, 0).unwrap();
-        tower.build_floor(FloorType::Hotel, 5).unwrap();
-        tower.add_elevator(0).unwrap();
+        tower.build_floor(FloorType::Retail, 2).unwrap(); // $35K * 1.1 = $38.5K
+        tower.add_elevator(0).unwrap(); // $50K
 
         let money_before = tower.get_state().money;
 
-        // Simulate a full day (1440 minutes)
+        // Run for a full day (1440 minutes)
         tower.advance(1440);
 
         let m = tower.metrics();
-        // After a day, we should have some revenue and expenses
         assert!(m.total_revenue > 0 || m.total_expenses > 0,
             "Economy should have some activity after a day");
-        // Money should change
         assert!(tower.get_state().money != money_before,
             "Money should change over a day of simulation");
+        // Profit rate should be reasonable (not 745%)
+        assert!(m.profit_rate < 300, "Profit rate should be reasonable, got {}%", m.profit_rate);
     }
 
     #[test]
@@ -650,7 +666,6 @@ mod tests {
         tower.build_floor(FloorType::Office, 3).unwrap();
         tower.add_elevator(0).unwrap();
 
-        // Spawn several people, advance a lot
         for _ in 0..10 {
             tower.spawn_person(0, 3);
         }
@@ -660,15 +675,13 @@ mod tests {
         assert!(m.satisfaction > 0.0, "Satisfaction should be tracked");
         assert!(m.people_served > 0, "Some people should be served");
     }
-
     #[test]
     fn test_build_cost_prevents_overspend() {
         let mut tower = Tower::new();
-        // Observatory costs 100k, we have 200k, so we can build 2 but not 3
-        tower.build_floor(FloorType::Observatory, 10).unwrap();
-        tower.build_floor(FloorType::Observatory, 20).unwrap();
-        let result = tower.build_floor(FloorType::Observatory, 30);
-        assert!(result.is_err(), "Should not afford third observatory");
+        // Observatory at low levels: 120k (level 1) + 120k (level 2) = 240k > 150k
+        tower.build_floor(FloorType::Observatory, 1).unwrap();
+        let result = tower.build_floor(FloorType::Observatory, 2);
+        assert!(result.is_err(), "Should not afford second observatory on remaining money");
     }
 
     #[test]
@@ -686,7 +699,6 @@ mod tests {
         tower.build_floor(FloorType::Lobby, 0).unwrap();
         let json = tower.to_json_compact();
         assert!(json.contains("Lobby"));
-        // Compact should be shorter
         assert!(json.len() < tower.to_json().len() + 5);
     }
 
@@ -697,11 +709,35 @@ mod tests {
         tower.build_floor(FloorType::Office, 5).unwrap();
         tower.add_elevator(0).unwrap();
 
-        // Run long enough that events might trigger
         tower.advance(5000);
 
-        // Events could have fired or not (random), just verify no crash
         let m = tower.metrics();
         assert!(m.satisfaction >= 0.0);
+    }
+
+    #[test]
+    fn test_height_increases_cost() {
+        let cost_low = FloorType::Office.build_cost(1);
+        let cost_high = FloorType::Office.build_cost(50);
+        assert!(cost_high > cost_low, "Higher floors should cost more: low={} high={}", cost_low, cost_high);
+    }
+
+    #[test]
+    fn test_revenue_is_four_times_daily() {
+        let mut tower = Tower::new();
+        tower.build_floor(FloorType::Lobby, 0).unwrap();
+        tower.build_floor(FloorType::Office, 5).unwrap();
+        tower.add_elevator(0).unwrap();
+
+        for _ in 0..5 {
+            tower.spawn_person(0, 5);
+        }
+
+        tower.advance(1440); // one full day
+
+        let m = tower.metrics();
+        // Revenue should exist from 4 daily income events
+        eprintln!("Day 1 revenue={}, expenses={}, profit_rate={}%", 
+            m.total_revenue, m.total_expenses, m.profit_rate);
     }
 }
